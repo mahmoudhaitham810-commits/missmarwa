@@ -421,6 +421,10 @@
                     <i class="fas fa-cloud-arrow-up"></i>
                     <span>إضافة محتوى جديد</span>
                 </button>
+                <button class="action-btn secondary" onclick="loadData()">
+                    <i class="fas fa-rotate"></i>
+                    <span>تحديث البيانات</span>
+                </button>
                 <button class="action-btn secondary" onclick="exportToCSV()">
                     <i class="fas fa-file-excel"></i>
                     <span>تصدير الطلاب CSV</span>
@@ -606,6 +610,9 @@
         </div>
     </div>
 
+    <!-- Universal Cloud Database Adapter -->
+    <script src="./db.js"></script>
+
     <script>
         const ADMIN_PIN = 'marwa2026';
         let allStudents = [];
@@ -640,19 +647,29 @@
             }
         }
 
-        function loadData() {
-            allStudents = JSON.parse(localStorage.getItem('mm_students_db') || '[]');
-            allLessons = JSON.parse(localStorage.getItem('mm_lessons_db') || '[]');
-            renderStudentsTable(allStudents);
-            renderLessonsTable(allLessons);
-            updateStats();
+        async function loadData() {
+            try {
+                if (typeof DB !== 'undefined' && DB.getStudents) {
+                    allStudents = await DB.getStudents();
+                    allLessons = await DB.getLessons('ALL', 'ALL');
+                } else {
+                    allStudents = JSON.parse(localStorage.getItem('mm_students_db') || '[]');
+                    allLessons = JSON.parse(localStorage.getItem('mm_lessons_db') || '[]');
+                }
+                renderStudentsTable(allStudents);
+                renderLessonsTable(allLessons);
+                updateStats();
+            } catch (err) {
+                console.error("Fetch Data Error:", err);
+                alert("حدث خطأ أثناء مزامنة البيانات مع الخادم: " + err.message);
+            }
         }
 
         function renderStudentsTable(students) {
             const tbody = document.getElementById('studentsTableBody');
             tbody.innerHTML = '';
 
-            if (students.length === 0) {
+            if (!students || students.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #64748b; padding: 30px;">لا يوجد طلاب مسجلين</td></tr>`;
                 return;
             }
@@ -662,9 +679,9 @@
                 tr.innerHTML = `
                     <td><span class="id-badge">${s.studentId}</span></td>
                     <td><strong>${s.firstName} ${s.lastName}</strong></td>
-                    <td>${s.grade.toUpperCase()}</td>
-                    <td dir="ltr" style="text-align: right;">${s.phone}</td>
-                    <td dir="ltr" style="text-align: right;">${s.parentPhone}</td>
+                    <td>${(s.grade || '').toUpperCase()}</td>
+                    <td dir="ltr" style="text-align: right;">${s.phone || '—'}</td>
+                    <td dir="ltr" style="text-align: right;">${s.parentPhone || '—'}</td>
                     <td>${s.createdAt || '—'}</td>
                     <td>
                         <button class="btn-table btn-reset" onclick="resetStudentPassword('${s.studentId}')">تغيير الباسورد</button>
@@ -679,7 +696,7 @@
             const tbody = document.getElementById('lessonsTableBody');
             tbody.innerHTML = '';
 
-            if (lessons.length === 0) {
+            if (!lessons || lessons.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 30px;">لا توجد ملفات مضافة بعد</td></tr>`;
                 return;
             }
@@ -694,10 +711,10 @@
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td><strong>${l.title}</strong></td>
-                    <td>${l.grade.toUpperCase()}</td>
+                    <td>${(l.grade || '').toUpperCase()}</td>
                     <td>${categoryBadges[l.category] || l.category}</td>
                     <td>${l.notes || '—'}</td>
-                    <td>${l.createdAt}</td>
+                    <td>${l.createdAt || '—'}</td>
                     <td>
                         <a href="${l.url}" target="_blank" class="btn-table btn-view">فتح الرابط <i class="fas fa-external-link-alt"></i></a>
                         <button class="btn-table btn-delete" onclick="deleteLesson('${l.id}')">حذف</button>
@@ -712,10 +729,10 @@
             const grade = document.getElementById('studentGradeFilter').value;
 
             const filtered = allStudents.filter(s => {
-                const matchQuery = s.studentId.toLowerCase().includes(q) ||
-                    `${s.firstName} ${s.lastName}`.toLowerCase().includes(q) ||
-                    s.phone.includes(q) || s.parentPhone.includes(q);
-                const matchGrade = (grade === 'ALL' || s.grade === grade);
+                const matchQuery = (s.studentId || '').toLowerCase().includes(q) ||
+                    `${s.firstName || ''} ${s.lastName || ''}`.toLowerCase().includes(q) ||
+                    (s.phone || '').includes(q) || (s.parentPhone || '').includes(q);
+                const matchGrade = (grade === 'ALL' || (s.grade || '').toLowerCase() === grade.toLowerCase());
                 return matchQuery && matchGrade;
             });
             renderStudentsTable(filtered);
@@ -727,9 +744,9 @@
             const cat = document.getElementById('lessonCategoryFilter').value;
 
             const filtered = allLessons.filter(l => {
-                const matchQuery = l.title.toLowerCase().includes(q) || (l.notes && l.notes.toLowerCase().includes(q));
-                const matchGrade = (grade === 'ALL' || l.grade === grade);
-                const matchCat = (cat === 'ALL' || l.category === cat);
+                const matchQuery = (l.title || '').toLowerCase().includes(q) || (l.notes && l.notes.toLowerCase().includes(q));
+                const matchGrade = (grade === 'ALL' || (l.grade || '').toLowerCase() === grade.toLowerCase());
+                const matchCat = (cat === 'ALL' || (l.category || '').toLowerCase() === cat.toLowerCase());
                 return matchQuery && matchGrade && matchCat;
             });
             renderLessonsTable(filtered);
@@ -744,66 +761,103 @@
             document.getElementById('addLessonForm').reset();
         }
 
-        document.getElementById('addLessonForm').addEventListener('submit', (e) => {
+        document.getElementById('addLessonForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
 
             const newLesson = {
-                id: 'ITEM-' + Date.now(),
                 title: document.getElementById('lessonTitle').value.trim(),
                 grade: document.getElementById('lessonGrade').value,
-                category: document.getElementById('lessonCategory').value, // 'videos', 'summaries', or 'exams'
+                category: document.getElementById('lessonCategory').value,
                 url: document.getElementById('lessonUrl').value.trim(),
-                notes: document.getElementById('lessonNotes').value.trim(),
-                createdAt: new Date().toLocaleDateString('ar-EG')
+                notes: document.getElementById('lessonNotes').value.trim()
             };
 
-            allLessons.unshift(newLesson);
-            localStorage.setItem('mm_lessons_db', JSON.stringify(allLessons));
+            try {
+                if (typeof DB !== 'undefined' && DB.addLesson) {
+                    await DB.addLesson(newLesson);
+                } else {
+                    newLesson.id = 'ITEM-' + Date.now();
+                    newLesson.createdAt = new Date().toLocaleDateString('ar-EG');
+                    allLessons.unshift(newLesson);
+                    localStorage.setItem('mm_lessons_db', JSON.stringify(allLessons));
+                }
 
-            closeAddLessonModal();
-            loadData();
-            switchSection('lessons');
-            alert(`تم نشر المحتوى بنجاح في قسم (${newLesson.category.toUpperCase()}) لصف (${newLesson.grade.toUpperCase()})!`);
+                closeAddLessonModal();
+                await loadData();
+                switchSection('lessons');
+                alert(`تم نشر المحتوى بنجاح في قسم (${newLesson.category.toUpperCase()}) لصف (${newLesson.grade.toUpperCase()})!`);
+            } catch (err) {
+                alert("فشل إضافة المحتوى: " + err.message);
+            } finally {
+                submitBtn.disabled = false;
+            }
         });
 
-        function deleteLesson(id) {
+        async function deleteLesson(id) {
             if (confirm('هل أنت متأكد من حذف هذا المحتوى؟')) {
-                allLessons = allLessons.filter(l => l.id !== id);
-                localStorage.setItem('mm_lessons_db', JSON.stringify(allLessons));
-                loadData();
+                try {
+                    if (typeof DB !== 'undefined' && DB.deleteLesson) {
+                        await DB.deleteLesson(id);
+                    } else {
+                        allLessons = allLessons.filter(l => l.id !== id);
+                        localStorage.setItem('mm_lessons_db', JSON.stringify(allLessons));
+                    }
+                    await loadData();
+                } catch (err) {
+                    alert("فشل حذف المحتوى: " + err.message);
+                }
             }
         }
 
-        function resetStudentPassword(studentId) {
+        async function resetStudentPassword(studentId) {
             const newPassword = prompt(`أدخل كلمة المرور الجديدة للطالب (${studentId}):`);
             if (!newPassword || newPassword.trim().length < 4) {
                 alert('كلمة المرور يجب ألا تقل عن 4 خانات');
                 return;
             }
-            const idx = allStudents.findIndex(s => s.studentId === studentId);
-            if (idx !== -1) {
-                allStudents[idx].password = newPassword.trim();
-                localStorage.setItem('mm_students_db', JSON.stringify(allStudents));
+            try {
+                if (typeof DB !== 'undefined' && DB.resetPassword) {
+                    await DB.resetPassword(studentId, newPassword.trim());
+                } else {
+                    const idx = allStudents.findIndex(s => s.studentId === studentId);
+                    if (idx !== -1) {
+                        allStudents[idx].password = newPassword.trim();
+                        localStorage.setItem('mm_students_db', JSON.stringify(allStudents));
+                    }
+                }
                 alert(`تم تحديث كلمة المرور للطالب ${studentId} بنجاح!`);
+                await loadData();
+            } catch (err) {
+                alert("فشل تحديث كلمة المرور: " + err.message);
             }
         }
 
-        function deleteStudent(studentId) {
+        async function deleteStudent(studentId) {
             if (confirm(`هل أنت متأكد من حذف حساب الطالب (${studentId}) نهائياً؟`)) {
-                allStudents = allStudents.filter(s => s.studentId !== studentId);
-                localStorage.setItem('mm_students_db', JSON.stringify(allStudents));
-                loadData();
+                try {
+                    if (typeof DB !== 'undefined' && DB.deleteStudent) {
+                        await DB.deleteStudent(studentId);
+                    } else {
+                        allStudents = allStudents.filter(s => s.studentId !== studentId);
+                        localStorage.setItem('mm_students_db', JSON.stringify(allStudents));
+                    }
+                    await loadData();
+                } catch (err) {
+                    alert("فشل حذف الطالب: " + err.message);
+                }
             }
         }
 
         function updateStats() {
             document.getElementById('totalStudentsCount').textContent = allStudents.length;
-            document.getElementById('prepCount').textContent = allStudents.filter(s => s.grade.startsWith('prep')).length;
-            document.getElementById('secCount').textContent = allStudents.filter(s => s.grade.startsWith('sec')).length;
+            document.getElementById('prepCount').textContent = allStudents.filter(s => (s.grade || '').toLowerCase().startsWith('prep')).length;
+            document.getElementById('secCount').textContent = allStudents.filter(s => (s.grade || '').toLowerCase().startsWith('sec')).length;
 
-            document.getElementById('totalVideosCount').textContent = allLessons.filter(l => l.category === 'videos').length;
-            document.getElementById('totalSummariesCount').textContent = allLessons.filter(l => l.category === 'summaries').length;
-            document.getElementById('totalExamsCount').textContent = allLessons.filter(l => l.category === 'exams').length;
+            document.getElementById('totalVideosCount').textContent = allLessons.filter(l => (l.category || '').toLowerCase() === 'videos').length;
+            document.getElementById('totalSummariesCount').textContent = allLessons.filter(l => (l.category || '').toLowerCase() === 'summaries').length;
+            document.getElementById('totalExamsCount').textContent = allLessons.filter(l => (l.category || '').toLowerCase() === 'exams').length;
         }
 
         function exportToCSV() {
